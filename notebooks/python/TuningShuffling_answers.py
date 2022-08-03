@@ -1,4 +1,11 @@
 # Databricks notebook source
+# MAGIC %md
+# MAGIC <div style="text-align: center; line-height: 0; padding-top: 9px;">
+# MAGIC   <img src="https://cdn2.hubspot.net/hubfs/438089/docs/training/dblearning-banner.png" alt="Databricks Learning" width="555" height="64">
+# MAGIC </div>
+
+# COMMAND ----------
+
 # MAGIC %md # Tuning Shuffling
 # MAGIC 
 # MAGIC ## When does shuffle come into play?
@@ -84,6 +91,9 @@ print("{0} {1}".format(spark.sparkContext.parallelize(range(51, 1, -1)).getNumPa
 # MAGIC     - Preferably fast storage, SSD / high performance disks.
 # MAGIC     - Use more than 1 Disk / SSD to avoid IO bottleneck (can be csv list of paths)
 # MAGIC     - Overridden by environment variables: `SPARK_LOCAL_DIRS` in standalone / Mesos and `LOCAL_DIRS` in YARN.
+# MAGIC 
+# MAGIC <img src="https://s3-us-west-2.amazonaws.com/curriculum-release/images/tuning/partition-agg-spill-to-disk.png" alt="Spill to disk"/><br/><br/>    
+# MAGIC 
 # MAGIC - `spark.reducer.maxSizeInFlight` - Maximum size of map outputs to fetch simultaneously from each reduce task. (default 48M)
 # MAGIC     - Keep low for clusters with limited memory 
 # MAGIC - `spark.reducer.maxReqsInFlight` - Limits the number of remote requests to fetch blocks at any given point. (default Int.MaxValue)
@@ -100,12 +110,11 @@ print("{0} {1}".format(spark.sparkContext.parallelize(range(51, 1, -1)).getNumPa
 # COMMAND ----------
 
 import math
-import re
 
 # We're working with MB.
 fileSize = 2 * 1024 ** 3
 # At the very least 1 whole partition is required
-partitionByBytes = math.ceil(fileSize / int(re.sub(f"[a-z]", "", spark.conf.get("spark.sql.files.maxPartitionBytes").lower())))
+partitionByBytes = math.ceil(fileSize / int(spark.conf.get("spark.sql.files.maxPartitionBytes")))
 
 # https://github.com/apache/spark/blob/master/core/src/main/scala/org/apache/spark/input/PortableDataStream.scala#L54
 partitionSize = max([partitionByBytes, sc.defaultParallelism])
@@ -118,6 +127,8 @@ print("numb partitions: " + str(int(partitionSize)))
 # MAGIC     - Redundant tasks being created are on stand-by until a core is available for execution.
 # MAGIC     - Look at length of task execution. Depends on hardware / size of partition. Ideally between 50ms - 200ms.
 # MAGIC     - Cluster sizing and resource allocation is hard, benchmark!
+# MAGIC 
+# MAGIC <img src="https://s3-us-west-2.amazonaws.com/curriculum-release/images/tuning/overallocation.png" alt="over-allocation of partitioning" style="width: 800px;"/><br/>    
 
 # COMMAND ----------
 
@@ -157,20 +168,22 @@ names.join(people, names["firstName"] == people["firstName"]).distinct().count()
 
 # COMMAND ----------
 
-# TODO 
-# Find the number of unique entries by first name.
-
-# - Filter out any parts of the DataFrames that are unnecessary.
-# - Join the new filtered DataFrames.
-# - Carry out a distinct on only one component of the resulting DataFrame from the join, not all the columns. 
-
-#count = names.select("firstName").union(people.select("firstName")).distinct().count()
-#display(count)
+# ANSWER
 
 n = names.select("firstName")
+# the final withColumnRenames is to allow the join below to be more simplistic syntactically. 
 p = people.select("firstName")
 
 n.join(p, ["firstName"]).distinct().count()
+
+
+# OR 2nd solution. Why is 1st one better? 
+# It helps deal with situations where two DF's are being joined on columns with the same name.
+
+# n = names.select("firstName")
+# p = people.select("firstName")
+
+# n.join(p, n["firstName"] == p["f_name"]).select("firstName").distinct().count()
 
 # COMMAND ----------
 
@@ -180,49 +193,36 @@ n.join(p, ["firstName"]).distinct().count()
 # MAGIC 
 # MAGIC Which query generated a more efficient shuffle?
 # MAGIC 
-# MAGIC ### Unoptimized Query
-# MAGIC 
-# MAGIC | Query       | Job ID | Stage ID(s) | Duration | Task S/T | Shuffle Read | Shuffle Write |
-# MAGIC |-------------|--------|----------|----------|----------|--------------|---------------|
-# MAGIC | **Unoptimized** | 17995  | 32486         | 	20 s         | 2/2         |              | 	874.7 MiB              |
-# MAGIC | **Unoptimized** | 17996  | 32487         |          | 0/0         |              |               |
-# MAGIC | **Unoptimized** | 17996  | 32488         | 7s         | 15/15         | 	874.7 MiB             | 835 B              |
-# MAGIC | **Unoptimized** | 17997  | 32489         |          | 0/0         |              |               |
-# MAGIC | **Unoptimized** | 17997  | 32490         |          | 0/0         |              |               |
-# MAGIC | **Unoptimized** | 17997  | 32491         | 39ms         | 1/1         |   885 B           |               |
-# MAGIC | **TOTAL** |   |          | **~27s**         | **17/17**         |   **875 MiB**           | **875 MiB**              |
-# MAGIC 
-# MAGIC ### Optimized Query
-# MAGIC 
-# MAGIC | Query       | Job ID | Stage ID(s) | Duration | Task S/T | Shuffle Read | Shuffle Write |
-# MAGIC |-------------|--------|----------|----------|----------|--------------|---------------|
-# MAGIC | **Optimized**   | 18898  | 33631         | 0.5s         | 2/2         |              | 1598.7 KiB              |
-# MAGIC | **Optimized**   | 18899  | 33632         |          | 0/0         |              |              |
-# MAGIC | **Optimized**   | 18899  | 33633         | 37ms         | 1/1         | 150.8 KiB             | 59.0 B              |
-# MAGIC | **Optimized**   | 18900  | 33634         |          | 0/0         |              |               |
-# MAGIC | **Optimized**   | 18900  | 33635         |          | 0/0         |              |               |
-# MAGIC | **Optimized**   | 18900  | 33636         | 27ms         | 1/1         |  59.0 B            |               |
-# MAGIC | **TOTAL**   |   |          | **~564ms**         | **4/4**         |  **~170 KiB**            | **1798.76 KiB**               |
+# MAGIC |     Stage   | Duration | Task S/T | Shuffle Read | Shuffle Write |
+# MAGIC |-------------|----------|----------|--------------|---------------|
+# MAGIC |     Basic 3 |    0.1 s |      1/1 |      11.5 KB |               |
+# MAGIC |     Basic 2 |     11 s |  200/200 |     950.7 MB |       11.5 KB |
+# MAGIC |     Basic 1 |  1.0 min |      2/2 |              |      950.7 MB |
+# MAGIC |             |          |          |              |               |
+# MAGIC | Optimized 3 |    51 ms |      1/1 |      11.5 KB |               |
+# MAGIC | Optimized 2 |      1 s |  200/200 |     150.8 KB |       11.5 KB |
+# MAGIC | Optimized 1 |      2 s |      2/2 |              |      150.8 KB |
 # MAGIC 
 # MAGIC From the above comparison of the data shuffled, we can see that a simple vertical filter in the form of a select allowed us to greatly reduce the data shuffled during the distinct transformation. 
 # MAGIC 
+# MAGIC But, another potential problem crops up:
+# MAGIC 
+# MAGIC  - Why 200 tasks?
 # MAGIC  - Let's check the DataFrame's full size in memory from the Spark UI and decide on appropriate partitioning. 
 # MAGIC  - You can access the UI by going to `Clusters` > `Spark UI`
 
 # COMMAND ----------
 
-# TODO
+# ANSWER
 # Cache the dataset from the join without removing any columns. 
+fullyJoinedDF = names.join(people, names["firstName"] == people["firstName"])
 
-df_join = names.join(people, names["firstName"] == people["firstName"])
-df_join.cache()
-df_join.count()
-
-# - If you are only caching a fraction, think about the action you are using.
-# - SHOW / FIRST will only fetch from an individual partition
-# - Spark is getting clever: If you don't compute every partition, you won't cache every partition. 
-
-# You should get approximately 591.5 MB. 
+# Counting involves all partitions in the DF. 
+# show() will only cache first partition; we want the entire DF, not just a fraction. 
+fullyJoinedDF.cache()
+# if you are only caching a fraction, think about the action you are using.
+# SHOW / FIRST will only fetch from an individual partition
+fullyJoinedDF.count()
 
 # COMMAND ----------
 
@@ -238,14 +238,17 @@ df_join.count()
 
 # COMMAND ----------
 
-# TODO
-# Let's answer the above.
-# 1. How many threads are avaiable to our application?
-# 2. What is the current partition count of the DataFrame?
-# 3. What is the approximate partition size of the DataFrame?
-numberPartitions = <<FILL_IN>>
-dfSize = 591.5 # from Spark UI: Change this, if it's wrong.
-dfPartitionSize = <<FILL_IN>>
+# ANSWER
+numberPartitions = fullyJoinedDF.rdd.getNumPartitions()
+dfSize = 591.5 # from Spark UI
+dfPartitionSize = dfSize / numberPartitions
+
+# 1 How many threads are avaiable to our application?
+print("Default parallelism: {0}".format(spark.sparkContext.defaultParallelism))
+# 2 What is the current partition count of the DataFrame?
+print("DF partition numb: {0}".format(numberPartitions))
+# 3 What is the approximate partition size of the DataFrame?
+print("DF partitions size (approx): {0}".format(dfPartitionSize))
 
 # COMMAND ----------
 
@@ -254,11 +257,25 @@ dfPartitionSize = <<FILL_IN>>
 
 # COMMAND ----------
 
-# TODO
+# ANSWER
+import math
 
-# - repartition the DataFrame  to something more optimal 
-# - review the above statements to decide on your numPartitions
-# - cache a single partition from the now repartitionedDF using the show() action. 
+# repartition the DataFrame  to something more optimal 
+# review the above statements to decide on your numPartitions
+# cache a single partition from the now repartitionedDF using the show() action. 
+
+executorCount =  1 # from Spark UI: cluster > spark_UI > Executor (typically 1 for CE)
+newPartitionSize = 100 # Between 50 and 200MB.
+defaultParallelism = spark.sparkContext.defaultParallelism
+numPartitions = max([defaultParallelism * 2, math.ceil(dfSize / newPartitionSize)])
+print("New partition count: {0}".format(numPartitions))
+
+repartitionedDF = fullyJoinedDF.repartition(int(numPartitions))
+print("repartitionedDF.rdd.getNumPartitions: {0}".format(repartitionedDF.rdd.getNumPartitions()))
+
+# cache only the first partition from the new df.
+repartitionedDF.cache()
+repartitionedDF.show()
 
 # COMMAND ----------
 
