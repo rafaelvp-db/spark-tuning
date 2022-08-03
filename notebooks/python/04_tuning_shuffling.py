@@ -222,8 +222,12 @@ df_join.count()
 # - SHOW / FIRST will only fetch from an individual partition
 # - Spark is getting clever: If you don't compute every partition, you won't cache every partition. 
 
-# <br/>
-# <img src="https://github.com/rafaelvp-db/spark-tuning/blob/master/notebooks/img/cache.png?raw=true" alt="Cached"/><br/>
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC 
+# MAGIC <br/>
+# MAGIC <img src="https://github.com/rafaelvp-db/spark-tuning/blob/master/notebooks/img/cache.png?raw=true" alt="Cached"/><br/>
 
 # COMMAND ----------
 
@@ -244,9 +248,17 @@ df_join.count()
 # 1. How many threads are avaiable to our application?
 # 2. What is the current partition count of the DataFrame?
 # 3. What is the approximate partition size of the DataFrame?
-numberPartitions = <<FILL_IN>>
-dfSize = 591.5 # from Spark UI: Change this, if it's wrong.
-dfPartitionSize = <<FILL_IN>>
+
+numberPartitions = df_join.rdd.getNumPartitions()
+dfSize = 591.5 # from Spark UI
+dfPartitionSize = dfSize / numberPartitions
+
+# 1 How many threads are avaiable to our application?
+print("Default parallelism: {0}".format(spark.sparkContext.defaultParallelism))
+# 2 What is the current partition count of the DataFrame?
+print("DF partition numb: {0}".format(numberPartitions))
+# 3 What is the approximate partition size of the DataFrame?
+print("DF partitions size (approx): {0}".format(dfPartitionSize))
 
 # COMMAND ----------
 
@@ -260,6 +272,20 @@ dfPartitionSize = <<FILL_IN>>
 # - repartition the DataFrame  to something more optimal 
 # - review the above statements to decide on your numPartitions
 # - cache a single partition from the now repartitionedDF using the show() action. 
+
+numberPartitions = df_join.rdd.getNumPartitions()
+newPartitionSize = 50
+defaultParallelism = int(spark.conf.get("spark.default.parallelism"))
+dfSize = 73.1 # from Spark UI: Change this, if it's wrong.
+numPartitions = max([defaultParallelism * 2, math.ceil(dfSize / newPartitionSize)])
+print("New partition count: {0}".format(numPartitions))
+
+repartitionedDF = df_join.repartition(int(numPartitions))
+print("repartitionedDF.rdd.getNumPartitions: {0}".format(repartitionedDF.rdd.getNumPartitions()))
+
+# cache only the first partition from the new df.
+repartitionedDF.cache()
+repartitionedDF.show()
 
 # COMMAND ----------
 
@@ -275,5 +301,9 @@ dfPartitionSize = <<FILL_IN>>
 # COMMAND ----------
 
 # Finally, make sure you remove any DF from the cache if you dont plan on using it. 
-fullyJoinedDF.unpersist()
+df_join.unpersist()
 repartitionedDF.unpersist()
+
+# COMMAND ----------
+
+
