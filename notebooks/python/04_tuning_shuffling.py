@@ -216,7 +216,8 @@ display(df_join)
 # - SHOW / FIRST will only fetch from an individual partition
 # - Spark is getting clever: If you don't compute every partition, you won't cache every partition. 
 
-# You should get approximately 591.5 MB. 
+# <br/>
+# <img src="https://github.com/rafaelvp-db/spark-tuning/blob/master/notebooks/img/cache.png?raw=true" alt="Cached"/><br/>
 
 # COMMAND ----------
 
